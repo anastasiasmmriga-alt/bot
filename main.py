@@ -153,6 +153,7 @@ def calendar_link(booking: Booking, duration_minutes: int, timezone: str) -> str
     end = start + timedelta(minutes=duration_minutes)
     studio_name = booking.studio.get("Название студии", "")
     address = booking.studio.get("Адрес", "")
+    title = f"Фотосессия {booking.client_name} {start:%d.%m.%Y} {start:%H:%M}"
     guide_lines = []
 
     if booking.guide:
@@ -172,7 +173,7 @@ def calendar_link(booking: Booking, duration_minutes: int, timezone: str) -> str
 
     params = {
         "action": "TEMPLATE",
-        "text": f"Съемка: {booking.client_name}",
+        "text": title,
         "dates": f"{start:%Y%m%dT%H%M%S}/{end:%Y%m%dT%H%M%S}",
         "ctz": timezone,
         "location": address,
@@ -248,8 +249,6 @@ def missing_fields(booking: Booking) -> list[str]:
         missing.append("дату и время")
     if not booking.studio:
         missing.append("студию")
-    if not booking.guide:
-        missing.append("тип съемки/гайды")
     return missing
 
 
