@@ -10,6 +10,8 @@ from io import StringIO
 from urllib.parse import quote_plus, urlencode
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -342,32 +344,55 @@ def format_client_message(booking: Booking) -> str:
 
 
 def crm_request(webhook_url: str, payload: dict) -> dict:
-    response = requests.post(
-        webhook_url,
-        json=payload,
-        timeout=30,
-        allow_redirects=True,
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 PhotoBookingBot/1.0",
-        },
+    # Apps Script возвращает ContentService через одноразовое
+    # перенаправление на script.googleusercontent.com.
+    # Повторяем только чтение GET-ответа, но не исходный POST,
+    # чтобы случайно не создать одну запись дважды.
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        status=3,
+        backoff_factor=1.0,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset({"GET"}),
+        raise_on_status=False,
     )
 
-    if response.status_code == 404 and "script.googleusercontent.com" in response.url:
-        raise RuntimeError(
-            "Google Apps Script вернул 404. Создайте новое развертывание "
-            "как веб-приложение, выберите доступ «Все» и используйте ссылку /exec."
-        )
+    session = requests.Session()
+    session.mount("https://", HTTPAdapter(max_retries=retry))
 
-    response.raise_for_status()
+    try:
+        response = session.post(
+            webhook_url,
+            json=payload,
+            timeout=(10, 90),
+            allow_redirects=True,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "PhotoBookingBot/1.0",
+            },
+        )
+        response.raise_for_status()
+    except requests.Timeout as error:
+        raise RuntimeError(
+            "Google Apps Script слишком долго отвечал. "
+            "Попробуйте нажать ещё раз через несколько секунд."
+        ) from error
+    except requests.RequestException as error:
+        raise RuntimeError(
+            f"Не удалось связаться с Google CRM: {error}"
+        ) from error
+    finally:
+        session.close()
 
     try:
         data = response.json()
     except ValueError as error:
         preview = response.text[:300].replace("\n", " ")
         raise RuntimeError(
-            "Google Apps Script вернул не JSON. "
-            f"Ответ: {preview}"
+            "Google Apps Script вернул некорректный ответ: "
+            f"{preview}"
         ) from error
 
     if not data.get("ok"):
@@ -655,4 +680,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-    
