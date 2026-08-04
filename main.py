@@ -93,7 +93,12 @@ def load_sheet(sheet_id: str, gid: str) -> list[dict]:
 
 
 def parse_name(text: str) -> str | None:
-    first_part = re.split(r"[,;\n]", text.strip(), maxsplit=1)[0].strip()
+    first_part = re.split(
+        r"[,;\n]",
+        text.strip(),
+        maxsplit=1,
+    )[0].strip()
+
     words = first_part.split()
 
     if not words:
@@ -109,7 +114,11 @@ def parse_name(text: str) -> str | None:
 
     for word in words:
         normalized = clean_key(
-            re.sub(r"[^А-Яа-яA-Za-z-]", "", word)
+            re.sub(
+                r"[^А-Яа-яA-Za-z-]",
+                "",
+                word,
+            )
         )
 
         if (
@@ -122,8 +131,13 @@ def parse_name(text: str) -> str | None:
     return None
 
 
-def parse_datetime(text: str, timezone: str) -> datetime | None:
-    now = datetime.now(ZoneInfo(timezone))
+def parse_datetime(
+    text: str,
+    timezone: str,
+) -> datetime | None:
+    now = datetime.now(
+        ZoneInfo(timezone)
+    )
 
     time_match = re.search(
         r"\b([01]?\d|2[0-3])[:. ]([0-5]\d)\b",
@@ -133,8 +147,13 @@ def parse_datetime(text: str, timezone: str) -> datetime | None:
     if not time_match:
         return None
 
-    hour = int(time_match.group(1))
-    minute = int(time_match.group(2))
+    hour = int(
+        time_match.group(1)
+    )
+
+    minute = int(
+        time_match.group(2)
+    )
 
     numeric_date = re.search(
         r"\b(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\b",
@@ -142,8 +161,14 @@ def parse_datetime(text: str, timezone: str) -> datetime | None:
     )
 
     if numeric_date:
-        day = int(numeric_date.group(1))
-        month = int(numeric_date.group(2))
+        day = int(
+            numeric_date.group(1)
+        )
+
+        month = int(
+            numeric_date.group(2)
+        )
+
         year = (
             int(numeric_date.group(3))
             if numeric_date.group(3)
@@ -165,9 +190,14 @@ def parse_datetime(text: str, timezone: str) -> datetime | None:
         except ValueError:
             return None
 
-        return bump_to_future(result, now)
+        return bump_to_future(
+            result,
+            now,
+        )
 
-    month_names = "|".join(MONTHS.keys())
+    month_names = "|".join(
+        MONTHS.keys()
+    )
 
     text_date = re.search(
         rf"\b(\d{{1,2}})\s+({month_names})(?:\s+(\d{{4}}))?\b",
@@ -175,8 +205,14 @@ def parse_datetime(text: str, timezone: str) -> datetime | None:
     )
 
     if text_date:
-        day = int(text_date.group(1))
-        month = MONTHS[text_date.group(2)]
+        day = int(
+            text_date.group(1)
+        )
+
+        month = MONTHS[
+            text_date.group(2)
+        ]
+
         year = (
             int(text_date.group(3))
             if text_date.group(3)
@@ -195,15 +231,23 @@ def parse_datetime(text: str, timezone: str) -> datetime | None:
         except ValueError:
             return None
 
-        return bump_to_future(result, now)
+        return bump_to_future(
+            result,
+            now,
+        )
 
     return None
 
 
-def bump_to_future(value: datetime, now: datetime) -> datetime:
+def bump_to_future(
+    value: datetime,
+    now: datetime,
+) -> datetime:
     if value < now:
         try:
-            return value.replace(year=value.year + 1)
+            return value.replace(
+                year=value.year + 1
+            )
         except ValueError:
             return value.replace(
                 year=value.year + 1,
@@ -221,14 +265,24 @@ def find_studio(
     matches = []
 
     for studio in studios:
-        name = studio.get("Название студии", "")
+        name = studio.get(
+            "Название студии",
+            "",
+        )
+
         key = clean_key(name)
 
         if key and key in normalized:
-            matches.append((len(key), studio))
+            matches.append(
+                (len(key), studio)
+            )
 
     return (
-        sorted(matches, key=lambda item: item[0], reverse=True)[0][1]
+        sorted(
+            matches,
+            key=lambda item: item[0],
+            reverse=True,
+        )[0][1]
         if matches
         else None
     )
@@ -242,14 +296,26 @@ def find_guide(
     matches = []
 
     for guide in guides:
-        shoot_type = guide.get("Тип съемки", "")
-        key = clean_key(shoot_type)
+        shoot_type = guide.get(
+            "Тип съемки",
+            "",
+        )
+
+        key = clean_key(
+            shoot_type
+        )
 
         if key and key in normalized:
-            matches.append((len(key), guide))
+            matches.append(
+                (len(key), guide)
+            )
 
     return (
-        sorted(matches, key=lambda item: item[0], reverse=True)[0][1]
+        sorted(
+            matches,
+            key=lambda item: item[0],
+            reverse=True,
+        )[0][1]
         if matches
         else None
     )
@@ -262,24 +328,33 @@ def calendar_link(
 ) -> str:
     if booking.date_time is None:
         raise ValueError(
-            "Дата и время обязательны для календаря"
+            "Дата и время обязательны"
         )
 
     start = booking.date_time
-    end = start + timedelta(minutes=duration_minutes)
+    end = start + timedelta(
+        minutes=duration_minutes
+    )
 
     studio = booking.studio or {}
 
     studio_name = (
-        studio.get("Название студии", "").strip()
+        studio.get(
+            "Название студии",
+            "",
+        ).strip()
         or "не указана"
     )
 
-    address = studio.get("Адрес", "").strip()
+    address = studio.get(
+        "Адрес",
+        "",
+    ).strip()
 
     title = (
         f"Фотосессия {booking.client_name} "
-        f"{start:%d.%m.%Y} {start:%H:%M}"
+        f"{start:%d.%m.%Y} "
+        f"{start:%H:%M}"
     )
 
     guide_lines = []
@@ -290,7 +365,10 @@ def calendar_link(
             ("Позы", "Позы"),
             ("Подготовка", "Подготовка"),
         ]:
-            value = booking.guide.get(key, "").strip()
+            value = booking.guide.get(
+                key,
+                "",
+            ).strip()
 
             if value:
                 guide_lines.append(
@@ -303,9 +381,13 @@ def calendar_link(
     ]
 
     if guide_lines:
-        details_lines.extend(["", *guide_lines])
+        details_lines.extend(
+            ["", *guide_lines]
+        )
 
-    details = "\n".join(details_lines)
+    details = "\n".join(
+        details_lines
+    )
 
     params = {
         "action": "TEMPLATE",
@@ -316,6 +398,57 @@ def calendar_link(
         ),
         "ctz": timezone,
         "location": address,
+        "details": details,
+    }
+
+    return (
+        "https://calendar.google.com/calendar/render?"
+        + urlencode(
+            params,
+            quote_via=quote_plus,
+        )
+    )
+
+
+def delivery_calendar_link(
+    booking: Booking,
+    timezone: str,
+) -> str:
+    if booking.date_time is None:
+        raise ValueError(
+            "Дата съёмки не указана"
+        )
+
+    delivery_date = (
+        booking.date_time
+        + timedelta(days=14)
+    ).date()
+
+    next_day = (
+        delivery_date
+        + timedelta(days=1)
+    )
+
+    title = (
+        f"Отдать фото — "
+        f"{booking.client_name}"
+    )
+
+    details = (
+        f"Срок отдачи фотографий клиенту "
+        f"{booking.client_name}.\n"
+        f"Съёмка была "
+        f"{booking.date_time:%d.%m.%Y}."
+    )
+
+    params = {
+        "action": "TEMPLATE",
+        "text": title,
+        "dates": (
+            f"{delivery_date:%Y%m%d}/"
+            f"{next_day:%Y%m%d}"
+        ),
+        "ctz": timezone,
         "details": details,
     }
 
@@ -341,11 +474,17 @@ def format_client_message(
     guide = booking.guide or {}
 
     studio_name = (
-        studio.get("Название студии", "").strip()
+        studio.get(
+            "Название студии",
+            "",
+        ).strip()
         or "уточняется"
     )
 
-    address = studio.get("Адрес", "").strip()
+    address = studio.get(
+        "Адрес",
+        "",
+    ).strip()
 
     arrive = studio.get(
         "За сколько минут прийти",
@@ -353,10 +492,19 @@ def format_client_message(
     ).strip()
 
     lines = [
-        f"{booking.client_name}, записала вас на съемку 🤍",
+        (
+            f"{booking.client_name}, "
+            f"записала вас на съемку 🤍"
+        ),
         "",
-        f"Дата: {booking.date_time:%d.%m.%Y}",
-        f"Время: {booking.date_time:%H:%M}",
+        (
+            f"Дата: "
+            f"{booking.date_time:%d.%m.%Y}"
+        ),
+        (
+            f"Время: "
+            f"{booking.date_time:%H:%M}"
+        ),
         f"Студия: {studio_name}",
     ]
 
@@ -370,8 +518,9 @@ def format_client_message(
             [
                 "",
                 (
-                    f"Пожалуйста, приходите за "
-                    f"{arrive} минут до начала."
+                    f"Пожалуйста, приходите "
+                    f"за {arrive} минут "
+                    f"до начала."
                 ),
             ]
         )
@@ -425,7 +574,10 @@ def format_client_message(
         ("Подготовка", "Подготовка"),
         ("Дополнительно", "Дополнительно"),
     ]:
-        value = guide.get(key, "").strip()
+        value = guide.get(
+            key,
+            "",
+        ).strip()
 
         if value:
             guide_lines.append(
@@ -489,16 +641,18 @@ def missing_fields(
             "дату и время"
         )
 
-    # Студия НЕ является обязательной
+    # Студия не обязательна
     return missing
 
 
 async def refresh_sheet_data(
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    config = context.application.bot_data[
-        "config"
-    ]
+    config = (
+        context.application.bot_data[
+            "config"
+        ]
+    )
 
     try:
         studios = await asyncio.to_thread(
@@ -526,8 +680,9 @@ async def refresh_sheet_data(
         csv.Error,
         ValueError,
     ):
-        # Если Google Таблица временно недоступна,
-        # бот продолжает использовать старые данные.
+        # Если таблица временно недоступна,
+        # бот продолжает работать
+        # со старыми данными.
         pass
 
 
@@ -551,23 +706,34 @@ async def handle_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    if not update.message or not update.message.text:
+    if (
+        not update.message
+        or not update.message.text
+    ):
         return
 
-    await refresh_sheet_data(context)
-
-    config = context.application.bot_data[
-        "config"
-    ]
-
-    studios = context.application.bot_data.get(
-        "studios",
-        [],
+    await refresh_sheet_data(
+        context
     )
 
-    guides = context.application.bot_data.get(
-        "guides",
-        [],
+    config = (
+        context.application.bot_data[
+            "config"
+        ]
+    )
+
+    studios = (
+        context.application.bot_data.get(
+            "studios",
+            [],
+        )
+    )
+
+    guides = (
+        context.application.bot_data.get(
+            "guides",
+            [],
+        )
     )
 
     booking = parse_booking(
@@ -577,7 +743,9 @@ async def handle_message(
         config["timezone"],
     )
 
-    missing = missing_fields(booking)
+    missing = missing_fields(
+        booking
+    )
 
     if missing:
         await update.message.reply_text(
@@ -591,15 +759,31 @@ async def handle_message(
         return
 
     try:
-        link = calendar_link(
+        shoot_link = calendar_link(
             booking,
-            config["duration_minutes"],
+            config[
+                "duration_minutes"
+            ],
             config["timezone"],
         )
 
-        message = format_client_message(
-            booking,
-            link,
+        delivery_link = (
+            delivery_calendar_link(
+                booking,
+                config["timezone"],
+            )
+        )
+
+        client_message = (
+            format_client_message(
+                booking,
+                shoot_link,
+            )
+        )
+
+        delivery_date = (
+            booking.date_time
+            + timedelta(days=14)
         )
 
     except ValueError:
@@ -610,8 +794,13 @@ async def handle_message(
         return
 
     await update.message.reply_text(
-        "Готово, вот сообщение для клиента:\n\n"
-        + message
+        "Готово, вот сообщение "
+        "для клиента:\n\n"
+        + client_message
+        + "\n\n"
+        + "📸 Напоминание об отдаче фотографий:\n"
+        + f"Дата: {delivery_date:%d.%m.%Y}\n"
+        + delivery_link
     )
 
 
@@ -681,10 +870,17 @@ def main() -> None:
         .build()
     )
 
-    app.bot_data["studios"] = studios
-    app.bot_data["guides"] = guides
+    app.bot_data[
+        "studios"
+    ] = studios
 
-    app.bot_data["config"] = {
+    app.bot_data[
+        "guides"
+    ] = guides
+
+    app.bot_data[
+        "config"
+    ] = {
         "sheet_id": sheet_id,
         "studios_gid": studios_gid,
         "guides_gid": guides_gid,
