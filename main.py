@@ -9,7 +9,11 @@ from urllib.parse import quote_plus, urlencode
 
 import requests
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -79,7 +83,8 @@ def load_sheet(sheet_id: str, gid: str) -> list[dict]:
         (
             index
             for index, row in enumerate(rows)
-            if "Название студии" in row or "Тип съемки" in row
+            if "Название студии" in row
+            or "Тип съемки" in row
         ),
         0,
     )
@@ -463,7 +468,6 @@ def delivery_calendar_link(
 
 def format_client_message(
     booking: Booking,
-    calendar_url: str,
 ) -> str:
     if booking.date_time is None:
         raise ValueError(
@@ -553,19 +557,6 @@ def format_client_message(
     if extra:
         lines.append(extra)
 
-    lines.extend(
-        [
-            "",
-            "Ссылка на Google Calendar:",
-            calendar_url,
-            "",
-            (
-                "Пожалуйста, проверьте дату "
-                "и время на всякий случай."
-            ),
-        ]
-    )
-
     guide_lines = []
 
     for label, key in [
@@ -641,7 +632,6 @@ def missing_fields(
             "дату и время"
         )
 
-    # Студия не обязательна
     return missing
 
 
@@ -680,9 +670,6 @@ async def refresh_sheet_data(
         csv.Error,
         ValueError,
     ):
-        # Если таблица временно недоступна,
-        # бот продолжает работать
-        # со старыми данными.
         pass
 
 
@@ -776,8 +763,7 @@ async def handle_message(
 
         client_message = (
             format_client_message(
-                booking,
-                shoot_link,
+                booking
             )
         )
 
@@ -793,14 +779,34 @@ async def handle_message(
         )
         return
 
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "📅 Добавить съёмку",
+                    url=shoot_link,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    (
+                        "📸 Отдать фото "
+                        f"{delivery_date:%d.%m.%Y}"
+                    ),
+                    url=delivery_link,
+                )
+            ],
+        ]
+    )
+
     await update.message.reply_text(
         "Готово, вот сообщение "
         "для клиента:\n\n"
         + client_message
         + "\n\n"
-        + "📸 Напоминание об отдаче фотографий:\n"
-        + f"Дата: {delivery_date:%d.%m.%Y}\n"
-        + delivery_link
+        + "📸 Срок отдачи фотографий: "
+        + f"{delivery_date:%d.%m.%Y}",
+        reply_markup=keyboard,
     )
 
 
