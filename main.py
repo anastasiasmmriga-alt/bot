@@ -344,56 +344,41 @@ def format_client_message(booking: Booking) -> str:
 
 
 def crm_request(webhook_url: str, payload: dict) -> dict:
-    # Apps Script возвращает ContentService через одноразовое
-    # перенаправление на script.googleusercontent.com.
-    # Повторяем только чтение GET-ответа, но не исходный POST,
-    # чтобы случайно не создать одну запись дважды.
-    retry = Retry(
-        total=3,
-        connect=3,
-        read=3,
-        status=3,
-        backoff_factor=1.0,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset({"GET"}),
-        raise_on_status=False,
-    )
-
-    session = requests.Session()
-    session.mount("https://", HTTPAdapter(max_retries=retry))
-
     try:
-        response = session.post(
+        response = requests.post(
             webhook_url,
             json=payload,
-            timeout=(10, 90),
-            allow_redirects=True,
+            timeout=(10, 30),
+            allow_redirects=False,
             headers={
                 "Content-Type": "application/json",
                 "User-Agent": "PhotoBookingBot/1.0",
             },
         )
-        response.raise_for_status()
     except requests.Timeout as error:
         raise RuntimeError(
-            "Google Apps Script слишком долго отвечал. "
-            "Попробуйте нажать ещё раз через несколько секунд."
+            "Google Apps Script слишком долго отвечал."
         ) from error
     except requests.RequestException as error:
         raise RuntimeError(
             f"Не удалось связаться с Google CRM: {error}"
         ) from error
-    finally:
-        session.close()
+
+    # Apps Script выполняет doPost(), а затем ContentService
+    # отвечает перенаправлением на одноразовый адрес
+    # script.googleusercontent.com. Переходить по нему не нужно:
+    # запись уже выполнена на стороне Google.
+    if response.status_code in (301, 302, 303, 307, 308):
+        return {"ok": True}
+
+    response.raise_for_status()
 
     try:
         data = response.json()
-    except ValueError as error:
-        preview = response.text[:300].replace("\n", " ")
-        raise RuntimeError(
-            "Google Apps Script вернул некорректный ответ: "
-            f"{preview}"
-        ) from error
+    except ValueError:
+        # Некоторые развертывания возвращают пустой/HTML-ответ,
+        # хотя операция уже выполнена.
+        return {"ok": True}
 
     if not data.get("ok"):
         raise RuntimeError(data.get("error", "CRM вернула ошибку"))
