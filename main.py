@@ -380,26 +380,46 @@ def load_crm_records(sheet_id: str, crm_gid: str) -> list[dict]:
 
 
 def get_cached_crm_records(config: dict) -> list[dict]:
-    now = datetime.now().timestamp()
-    cached_at = config.get("_crm_cache_at", 0)
     cached_records = config.get("_crm_cache_records")
 
-    if (
-        cached_records is not None
-        and now - cached_at < CRM_CACHE_TTL_SECONDS
-    ):
+    if cached_records is not None:
         return cached_records
 
-    records = get_cached_crm_records(config)
+    records = load_crm_records(
+        config["sheet_id"],
+        config["crm_gid"],
+    )
 
     config["_crm_cache_records"] = records
-    config["_crm_cache_at"] = now
+    config["_crm_cache_at"] = datetime.now().timestamp()
 
     return records
 
 
 def invalidate_crm_cache(config: dict) -> None:
-    config["_crm_cache_at"] = 0
+    return
+
+
+def update_cached_record(
+    config: dict,
+    booking_id: str,
+    column: str,
+    value: str,
+    extra: dict | None = None,
+) -> dict | None:
+    records = config.get("_crm_cache_records") or []
+
+    for record in records:
+        if str(record.get("ID", "")) == str(booking_id):
+            record[column] = value
+
+            for extra_column, extra_value in (extra or {}).items():
+                record[extra_column] = extra_value
+
+            config["_crm_cache_at"] = datetime.now().timestamp()
+            return record
+
+    return None
 
 
 def parse_crm_date(value: str) -> datetime | None:
@@ -1062,31 +1082,45 @@ async def handle_crm_navigation(
             if status_code == "sent":
                 extra["Фото отданы"] = "Да"
 
-            await asyncio.to_thread(
-                crm_get,
-                context.application.bot_data["config"],
-                {
-                    "action": "update",
-                    "id": booking_id,
-                    "column": "Статус",
-                    "value": status,
-                    "extra": extra,
-                },
+            config = context.application.bot_data["config"]
+
+            record = update_cached_record(
+                config,
+                booking_id,
+                "Статус",
+                status,
+                extra,
             )
 
-            response = await asyncio.to_thread(
-                crm_get,
-                context.application.bot_data["config"],
-                {
-                    "action": "get",
-                    "id": booking_id,
-                },
-            )
-            record = response.get("record")
-            await query.edit_message_text(
-                format_crm_card(record),
-                reply_markup=booking_status_keyboard(booking_id),
-            )
+            if record:
+                await query.edit_message_text(
+                    format_crm_card(record),
+                    reply_markup=booking_status_keyboard(booking_id),
+                )
+
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        crm_write,
+                        config["crm_webhook_url"],
+                        {
+                            "action": "update",
+                            "id": booking_id,
+                            "column": "Статус",
+                            "value": status,
+                            "extra": extra,
+                        },
+                    ),
+                    timeout=12,
+                )
+            except Exception as error:
+                await query.answer(
+                    f"Статус показан, но Google не подтвердил запись: {error}",
+                    show_alert=True,
+                )
+                return
+
+            await query.answer("Статус обновлён ✅")
             return
 
         if data.startswith("cf:"):
@@ -1102,31 +1136,44 @@ async def handle_crm_navigation(
                 await query.answer("Неизвестное поле", show_alert=True)
                 return
 
-            await asyncio.to_thread(
-                crm_get,
-                context.application.bot_data["config"],
-                {
-                    "action": "update",
-                    "id": booking_id,
-                    "column": column,
-                    "value": "Да",
-                    "extra": {},
-                },
+            config = context.application.bot_data["config"]
+
+            record = update_cached_record(
+                config,
+                booking_id,
+                column,
+                "Да",
             )
 
-            response = await asyncio.to_thread(
-                crm_get,
-                context.application.bot_data["config"],
-                {
-                    "action": "get",
-                    "id": booking_id,
-                },
-            )
-            record = response.get("record")
-            await query.edit_message_text(
-                format_crm_card(record),
-                reply_markup=booking_status_keyboard(booking_id),
-            )
+            if record:
+                await query.edit_message_text(
+                    format_crm_card(record),
+                    reply_markup=booking_status_keyboard(booking_id),
+                )
+
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        crm_write,
+                        config["crm_webhook_url"],
+                        {
+                            "action": "update",
+                            "id": booking_id,
+                            "column": column,
+                            "value": "Да",
+                            "extra": {},
+                        },
+                    ),
+                    timeout=12,
+                )
+            except Exception as error:
+                await query.answer(
+                    f"Отметка показана, но Google не подтвердил запись: {error}",
+                    show_alert=True,
+                )
+                return
+
+            await query.answer("Обновлено ✅")
             return
 
     except Exception as error:
