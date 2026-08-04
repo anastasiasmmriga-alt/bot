@@ -671,41 +671,41 @@ def booking_status_keyboard(booking_id: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     "🟢 Записана",
-                    callback_data=f"crmstatus:Записана:{booking_id}",
+                    callback_data=f"cs:booked:{booking_id}",
                 ),
                 InlineKeyboardButton(
                     "📸 Съёмка прошла",
-                    callback_data=f"crmstatus:Съёмка прошла:{booking_id}",
+                    callback_data=f"cs:done:{booking_id}",
                 ),
             ],
             [
                 InlineKeyboardButton(
                     "💻 Обработка",
-                    callback_data=f"crmstatus:Обработка:{booking_id}",
+                    callback_data=f"cs:edit:{booking_id}",
                 ),
                 InlineKeyboardButton(
                     "📤 Фото отправлены",
-                    callback_data=f"crmstatus:Фото отправлены:{booking_id}",
+                    callback_data=f"cs:sent:{booking_id}",
                 ),
             ],
             [
                 InlineKeyboardButton(
                     "💵 Мне оплачено",
-                    callback_data=f"crmfield:Мне оплачено:Да:{booking_id}",
+                    callback_data=f"cf:work:{booking_id}",
                 ),
                 InlineKeyboardButton(
                     "🏢 Студия оплачена",
-                    callback_data=f"crmfield:Студия оплачена:Да:{booking_id}",
+                    callback_data=f"cf:studio:{booking_id}",
                 ),
             ],
             [
                 InlineKeyboardButton(
                     "✅ Закрыть",
-                    callback_data=f"crmstatus:Закрыта:{booking_id}",
+                    callback_data=f"cs:closed:{booking_id}",
                 ),
                 InlineKeyboardButton(
                     "❌ Отменить",
-                    callback_data=f"crmstatus:Отменена:{booking_id}",
+                    callback_data=f"cs:cancel:{booking_id}",
                 ),
             ],
             [
@@ -926,10 +926,25 @@ async def handle_crm_navigation(
             )
             return
 
-        if data.startswith("crmstatus:"):
-            _, status, booking_id = data.split(":", 2)
+        if data.startswith("cs:"):
+            _, status_code, booking_id = data.split(":", 2)
+
+            status_map = {
+                "booked": "Записана",
+                "done": "Съёмка прошла",
+                "edit": "Обработка",
+                "sent": "Фото отправлены",
+                "closed": "Закрыта",
+                "cancel": "Отменена",
+            }
+
+            status = status_map.get(status_code)
+            if not status:
+                await query.answer("Неизвестный статус", show_alert=True)
+                return
+
             extra = {}
-            if status == "Фото отправлены":
+            if status_code == "sent":
                 extra["Фото отданы"] = "Да"
 
             await asyncio.to_thread(
@@ -959,8 +974,18 @@ async def handle_crm_navigation(
             )
             return
 
-        if data.startswith("crmfield:"):
-            _, column, value, booking_id = data.split(":", 3)
+        if data.startswith("cf:"):
+            _, field_code, booking_id = data.split(":", 2)
+
+            field_map = {
+                "work": "Мне оплачено",
+                "studio": "Студия оплачена",
+            }
+
+            column = field_map.get(field_code)
+            if not column:
+                await query.answer("Неизвестное поле", show_alert=True)
+                return
 
             await asyncio.to_thread(
                 crm_get,
@@ -969,7 +994,7 @@ async def handle_crm_navigation(
                     "action": "update",
                     "id": booking_id,
                     "column": column,
-                    "value": value,
+                    "value": "Да",
                     "extra": {},
                 },
             )
@@ -991,6 +1016,30 @@ async def handle_crm_navigation(
 
     except Exception as error:
         await query.answer(f"Ошибка CRM: {error}", show_alert=True)
+
+
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    print(f"Telegram bot error: {context.error!r}")
+
+    if isinstance(update, Update):
+        if update.callback_query:
+            try:
+                await update.callback_query.answer(
+                    "Ошибка при обработке кнопки. Проверьте Railway Logs.",
+                    show_alert=True,
+                )
+            except Exception:
+                pass
+        elif update.effective_message:
+            try:
+                await update.effective_message.reply_text(
+                    "Произошла ошибка. Посмотрите Railway Logs."
+                )
+            except Exception:
+                pass
 
 def main() -> None:
     asyncio.set_event_loop(asyncio.new_event_loop())
@@ -1034,10 +1083,11 @@ def main() -> None:
     app.add_handler(
         CallbackQueryHandler(
             handle_crm_navigation,
-            pattern=r"^(crmlist:|crmopen:|crmstatus:|crmfield:|crmmenu$)",
+            pattern=r"^(crmlist:|crmopen:|cs:|cf:|crmmenu$)",
         )
     )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_error_handler(error_handler)
 
     app.run_polling()
 
