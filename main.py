@@ -41,6 +41,9 @@ MONTHS = {
 }
 
 
+CRM_CACHE_TTL_SECONDS = 60
+
+
 @dataclass
 class Booking:
     booking_id: str
@@ -376,6 +379,29 @@ def load_crm_records(sheet_id: str, crm_gid: str) -> list[dict]:
     return load_sheet(sheet_id, crm_gid)
 
 
+def get_cached_crm_records(config: dict) -> list[dict]:
+    now = datetime.now().timestamp()
+    cached_at = config.get("_crm_cache_at", 0)
+    cached_records = config.get("_crm_cache_records")
+
+    if (
+        cached_records is not None
+        and now - cached_at < CRM_CACHE_TTL_SECONDS
+    ):
+        return cached_records
+
+    records = get_cached_crm_records(config)
+
+    config["_crm_cache_records"] = records
+    config["_crm_cache_at"] = now
+
+    return records
+
+
+def invalidate_crm_cache(config: dict) -> None:
+    config["_crm_cache_at"] = 0
+
+
 def parse_crm_date(value: str) -> datetime | None:
     value = (value or "").strip()
     if not value:
@@ -390,10 +416,7 @@ def parse_crm_date(value: str) -> datetime | None:
 
 
 def crm_read(config: dict, payload: dict) -> dict:
-    records = load_crm_records(
-        config["sheet_id"],
-        config["crm_gid"],
-    )
+    records = get_cached_crm_records(config)
     action = payload.get("action")
 
     if action == "get":
@@ -508,6 +531,15 @@ async def create_crm_record(
 
 async def refresh_sheet_data(context: ContextTypes.DEFAULT_TYPE) -> None:
     config = context.application.bot_data["config"]
+    now = datetime.now().timestamp()
+    last_refresh = context.application.bot_data.get(
+        "sheet_cache_at",
+        0,
+    )
+
+    if now - last_refresh < 60:
+        return
+
     try:
         studios, guides = await asyncio.gather(
             asyncio.to_thread(
@@ -523,6 +555,7 @@ async def refresh_sheet_data(context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         context.application.bot_data["studios"] = studios
         context.application.bot_data["guides"] = guides
+        context.application.bot_data["sheet_cache_at"] = now
     except (requests.RequestException, csv.Error, ValueError):
         pass
 
@@ -737,6 +770,7 @@ def crm_get(config: dict, payload: dict) -> dict:
             config["crm_webhook_url"],
             payload,
         )
+        invalidate_crm_cache(config)
 
     if not result.get("ok"):
         raise RuntimeError(
@@ -1158,6 +1192,16 @@ def main() -> None:
         "timezone": timezone,
         "duration_minutes": duration_minutes,
     }
+
+    try:
+        app.bot_data["config"]["_crm_cache_records"] = load_crm_records(
+            sheet_id,
+            crm_gid,
+        )
+        app.bot_data["config"]["_crm_cache_at"] = datetime.now().timestamp()
+    except Exception:
+        app.bot_data["config"]["_crm_cache_records"] = []
+        app.bot_data["config"]["_crm_cache_at"] = 0
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("crm", crm_command))
