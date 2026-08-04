@@ -344,8 +344,10 @@ def format_client_message(booking: Booking) -> str:
 
 
 def crm_request(webhook_url: str, payload: dict) -> dict:
+    session = requests.Session()
+
     try:
-        response = requests.post(
+        initial = session.post(
             webhook_url,
             json=payload,
             timeout=(10, 30),
@@ -355,33 +357,52 @@ def crm_request(webhook_url: str, payload: dict) -> dict:
                 "User-Agent": "PhotoBookingBot/1.0",
             },
         )
+
+        if initial.status_code in (301, 302, 303, 307, 308):
+            redirect_url = initial.headers.get("Location")
+
+            if not redirect_url:
+                raise RuntimeError(
+                    "Google Apps Script не вернул redirect-ссылку"
+                )
+
+            response = session.get(
+                redirect_url,
+                timeout=(10, 30),
+                allow_redirects=True,
+                headers={
+                    "User-Agent": "PhotoBookingBot/1.0",
+                },
+            )
+        else:
+            response = initial
+
+        response.raise_for_status()
+
     except requests.Timeout as error:
         raise RuntimeError(
-            "Google Apps Script слишком долго отвечал."
+            "Google Apps Script слишком долго отвечал"
         ) from error
     except requests.RequestException as error:
         raise RuntimeError(
             f"Не удалось связаться с Google CRM: {error}"
         ) from error
-
-    # Apps Script выполняет doPost(), а затем ContentService
-    # отвечает перенаправлением на одноразовый адрес
-    # script.googleusercontent.com. Переходить по нему не нужно:
-    # запись уже выполнена на стороне Google.
-    if response.status_code in (301, 302, 303, 307, 308):
-        return {"ok": True}
-
-    response.raise_for_status()
+    finally:
+        session.close()
 
     try:
         data = response.json()
-    except ValueError:
-        # Некоторые развертывания возвращают пустой/HTML-ответ,
-        # хотя операция уже выполнена.
-        return {"ok": True}
+    except ValueError as error:
+        preview = response.text[:300].replace("\n", " ")
+        raise RuntimeError(
+            "Google CRM вернула не JSON: "
+            f"{preview}"
+        ) from error
 
     if not data.get("ok"):
-        raise RuntimeError(data.get("error", "CRM вернула ошибку"))
+        raise RuntimeError(
+            data.get("error", "CRM вернула ошибку")
+        )
 
     return data
 
