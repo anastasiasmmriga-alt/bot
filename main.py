@@ -636,6 +636,341 @@ async def handle_crm_button(
     await query.answer(command["message"], show_alert=True)
 
 
+
+def crm_get(webhook_url: str, payload: dict) -> dict:
+    result = crm_request(webhook_url, payload)
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error", "CRM вернула ошибку"))
+    return result
+
+
+def booking_status_keyboard(booking_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🟢 Записана",
+                    callback_data=f"crmstatus:Записана:{booking_id}",
+                ),
+                InlineKeyboardButton(
+                    "📸 Съёмка прошла",
+                    callback_data=f"crmstatus:Съёмка прошла:{booking_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "💻 Обработка",
+                    callback_data=f"crmstatus:Обработка:{booking_id}",
+                ),
+                InlineKeyboardButton(
+                    "📤 Фото отправлены",
+                    callback_data=f"crmstatus:Фото отправлены:{booking_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "💵 Мне оплачено",
+                    callback_data=f"crmfield:Мне оплачено:Да:{booking_id}",
+                ),
+                InlineKeyboardButton(
+                    "🏢 Студия оплачена",
+                    callback_data=f"crmfield:Студия оплачена:Да:{booking_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "✅ Закрыть",
+                    callback_data=f"crmstatus:Закрыта:{booking_id}",
+                ),
+                InlineKeyboardButton(
+                    "❌ Отменить",
+                    callback_data=f"crmstatus:Отменена:{booking_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ К списку",
+                    callback_data="crmlist:active",
+                )
+            ],
+        ]
+    )
+
+
+def format_crm_card(record: dict) -> str:
+    return (
+        f"📸 {record.get('Клиент', 'Без имени')}\n\n"
+        f"📅 {record.get('Дата съёмки', '')}\n"
+        f"🕒 {record.get('Время', '')}\n"
+        f"🏢 {record.get('Студия', '') or 'Студия не указана'}\n"
+        f"🎞 {record.get('Тип съёмки', '') or 'Тип не указан'}\n\n"
+        f"💰 Моя работа: {record.get('Моя стоимость, €', 0)} €\n"
+        f"🏢 Студия: {record.get('Стоимость студии, €', 0)} €\n"
+        f"💵 Мне оплачено: {record.get('Мне оплачено', 'Нет')}\n"
+        f"🏢 Студия оплачена: {record.get('Студия оплачена', 'Нет')}\n\n"
+        f"📌 Статус: {record.get('Статус', '')}\n"
+        f"📤 Фото отданы: {record.get('Фото отданы', 'Нет')}\n"
+        f"⏳ Срок отдачи: {record.get('Срок отдачи', '')}"
+    )
+
+
+async def crm_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if not update.message:
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "📅 Активные съёмки",
+                    callback_data="crmlist:active",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📤 Пора отдавать",
+                    callback_data="crmlist:delivery",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "💵 Не оплачено мне",
+                    callback_data="crmlist:unpaid_work",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🏢 Не оплачена студия",
+                    callback_data="crmlist:unpaid_studio",
+                )
+            ],
+        ]
+    )
+
+    await update.message.reply_text(
+        "📋 CRM\n\nВыберите раздел:",
+        reply_markup=keyboard,
+    )
+
+
+async def client_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if not update.message:
+        return
+
+    query_text = " ".join(context.args).strip()
+
+    if not query_text:
+        await update.message.reply_text(
+            "Напишите имя после команды.\nНапример:\n/client Анна"
+        )
+        return
+
+    try:
+        data = await asyncio.to_thread(
+            crm_get,
+            context.application.bot_data["config"]["crm_webhook_url"],
+            {
+                "action": "search",
+                "query": query_text,
+            },
+        )
+    except Exception as error:
+        await update.message.reply_text(f"Ошибка CRM: {error}")
+        return
+
+    records = data.get("records", [])
+
+    if not records:
+        await update.message.reply_text("Клиент не найден.")
+        return
+
+    if len(records) == 1:
+        record = records[0]
+        await update.message.reply_text(
+            format_crm_card(record),
+            reply_markup=booking_status_keyboard(record["ID"]),
+        )
+        return
+
+    keyboard = []
+    for record in records[:20]:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    f"{record.get('Дата съёмки', '')} — {record.get('Клиент', '')}",
+                    callback_data=f"crmopen:{record['ID']}",
+                )
+            ]
+        )
+
+    await update.message.reply_text(
+        "Нашла несколько записей:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def handle_crm_navigation(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    query = update.callback_query
+    if not query:
+        return
+
+    await query.answer()
+    data = query.data or ""
+    webhook = context.application.bot_data["config"]["crm_webhook_url"]
+
+    try:
+        if data.startswith("crmlist:"):
+            list_type = data.split(":", 1)[1]
+            response = await asyncio.to_thread(
+                crm_get,
+                webhook,
+                {
+                    "action": "list",
+                    "list_type": list_type,
+                },
+            )
+            records = response.get("records", [])
+
+            if not records:
+                await query.edit_message_text("В этом разделе пока пусто ✅")
+                return
+
+            keyboard = []
+            for record in records[:30]:
+                label = (
+                    f"{record.get('Дата съёмки', '')} "
+                    f"{record.get('Время', '')} — "
+                    f"{record.get('Клиент', '')}"
+                )
+                keyboard.append(
+                    [
+                        InlineKeyboardButton(
+                            label,
+                            callback_data=f"crmopen:{record['ID']}",
+                        )
+                    ]
+                )
+
+            keyboard.append(
+                [InlineKeyboardButton("⬅️ В CRM", callback_data="crmmenu")]
+            )
+            await query.edit_message_text(
+                "Выберите съёмку:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+            return
+
+        if data == "crmmenu":
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("📅 Активные съёмки", callback_data="crmlist:active")],
+                    [InlineKeyboardButton("📤 Пора отдавать", callback_data="crmlist:delivery")],
+                    [InlineKeyboardButton("💵 Не оплачено мне", callback_data="crmlist:unpaid_work")],
+                    [InlineKeyboardButton("🏢 Не оплачена студия", callback_data="crmlist:unpaid_studio")],
+                ]
+            )
+            await query.edit_message_text(
+                "📋 CRM\n\nВыберите раздел:",
+                reply_markup=keyboard,
+            )
+            return
+
+        if data.startswith("crmopen:"):
+            booking_id = data.split(":", 1)[1]
+            response = await asyncio.to_thread(
+                crm_get,
+                webhook,
+                {
+                    "action": "get",
+                    "id": booking_id,
+                },
+            )
+            record = response.get("record")
+            if not record:
+                await query.edit_message_text("Запись не найдена.")
+                return
+
+            await query.edit_message_text(
+                format_crm_card(record),
+                reply_markup=booking_status_keyboard(booking_id),
+            )
+            return
+
+        if data.startswith("crmstatus:"):
+            _, status, booking_id = data.split(":", 2)
+            extra = {}
+            if status == "Фото отправлены":
+                extra["Фото отданы"] = "Да"
+
+            await asyncio.to_thread(
+                crm_get,
+                webhook,
+                {
+                    "action": "update",
+                    "id": booking_id,
+                    "column": "Статус",
+                    "value": status,
+                    "extra": extra,
+                },
+            )
+
+            response = await asyncio.to_thread(
+                crm_get,
+                webhook,
+                {
+                    "action": "get",
+                    "id": booking_id,
+                },
+            )
+            record = response.get("record")
+            await query.edit_message_text(
+                format_crm_card(record),
+                reply_markup=booking_status_keyboard(booking_id),
+            )
+            return
+
+        if data.startswith("crmfield:"):
+            _, column, value, booking_id = data.split(":", 3)
+
+            await asyncio.to_thread(
+                crm_get,
+                webhook,
+                {
+                    "action": "update",
+                    "id": booking_id,
+                    "column": column,
+                    "value": value,
+                    "extra": {},
+                },
+            )
+
+            response = await asyncio.to_thread(
+                crm_get,
+                webhook,
+                {
+                    "action": "get",
+                    "id": booking_id,
+                },
+            )
+            record = response.get("record")
+            await query.edit_message_text(
+                format_crm_card(record),
+                reply_markup=booking_status_keyboard(booking_id),
+            )
+            return
+
+    except Exception as error:
+        await query.answer(f"Ошибка CRM: {error}", show_alert=True)
+
 def main() -> None:
     asyncio.set_event_loop(asyncio.new_event_loop())
     load_dotenv()
@@ -672,7 +1007,15 @@ def main() -> None:
     }
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("crm", crm_command))
+    app.add_handler(CommandHandler("client", client_command))
     app.add_handler(CallbackQueryHandler(handle_crm_button, pattern=r"^crm:"))
+    app.add_handler(
+        CallbackQueryHandler(
+            handle_crm_navigation,
+            pattern=r"^(crmlist:|crmopen:|crmstatus:|crmfield:|crmmenu$)",
+        )
+    )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     app.run_polling()
