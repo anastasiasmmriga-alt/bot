@@ -540,15 +540,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             config["timezone"],
         )
         client_message = format_client_message(booking)
-
-        await create_crm_record(
-            config["crm_webhook_url"],
-            booking,
-            shoot_type,
-        )
     except Exception as error:
         await update.message.reply_text(
-            "Не получилось сохранить запись в CRM.\n"
+            "Не получилось подготовить запись.\n"
             f"Ошибка: {error}"
         )
         return
@@ -556,7 +550,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     delivery_date = booking.date_time + timedelta(days=14)
 
     await update.message.reply_text(
-        "✅ Запись добавлена в CRM\n\n"
+        "⏳ Готово. Сохраняю запись в CRM…\n\n"
         f"💰 Моя работа: {format_euro(booking.work_price)}\n"
         f"🏢 Студия: {format_euro(booking.studio_price)}\n"
         f"📸 Срок отдачи: {delivery_date:%d.%m.%Y}\n\n"
@@ -568,6 +562,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             delivery_link,
         ),
     )
+
+    try:
+        await asyncio.wait_for(
+            create_crm_record(
+                config["crm_webhook_url"],
+                booking,
+                shoot_type,
+            ),
+            timeout=25,
+        )
+        await update.message.reply_text("✅ Запись сохранена в CRM")
+    except asyncio.TimeoutError:
+        await update.message.reply_text(
+            "⚠️ Google CRM отвечает слишком долго. "
+            "Сообщение и календарь уже готовы, но строка в таблице могла не сохраниться."
+        )
+    except Exception as error:
+        await update.message.reply_text(
+            "⚠️ Сообщение и календарь готовы, но CRM не сохранилась.\n"
+            f"Ошибка: {error}"
+        )
 
 
 async def handle_crm_button(
