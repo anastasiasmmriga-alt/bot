@@ -342,11 +342,37 @@ def format_client_message(booking: Booking) -> str:
 
 
 def crm_request(webhook_url: str, payload: dict) -> dict:
-    response = requests.post(webhook_url, json=payload, timeout=20)
+    response = requests.post(
+        webhook_url,
+        json=payload,
+        timeout=30,
+        allow_redirects=True,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 PhotoBookingBot/1.0",
+        },
+    )
+
+    if response.status_code == 404 and "script.googleusercontent.com" in response.url:
+        raise RuntimeError(
+            "Google Apps Script вернул 404. Создайте новое развертывание "
+            "как веб-приложение, выберите доступ «Все» и используйте ссылку /exec."
+        )
+
     response.raise_for_status()
-    data = response.json()
+
+    try:
+        data = response.json()
+    except ValueError as error:
+        preview = response.text[:300].replace("\n", " ")
+        raise RuntimeError(
+            "Google Apps Script вернул не JSON. "
+            f"Ответ: {preview}"
+        ) from error
+
     if not data.get("ok"):
         raise RuntimeError(data.get("error", "CRM вернула ошибку"))
+
     return data
 
 
@@ -629,3 +655,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    
