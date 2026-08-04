@@ -376,7 +376,15 @@ def crm_write(webhook_url: str, payload: dict) -> dict:
 
 
 def load_crm_records(sheet_id: str, crm_gid: str) -> list[dict]:
-    return load_sheet(sheet_id, crm_gid)
+    records = load_sheet(sheet_id, crm_gid)
+
+    return [
+        record
+        for record in records
+        if str(record.get("ID", "")).strip()
+        and str(record.get("Клиент", "")).strip()
+        and str(record.get("Дата съёмки", "")).strip()
+    ]
 
 
 def get_cached_crm_records(config: dict) -> list[dict]:
@@ -486,7 +494,12 @@ def crm_read(config: dict, payload: dict) -> dict:
             include = False
 
             if list_type == "active":
-                include = status not in ("Закрыта", "Отменена")
+                include = (
+                    bool(str(row.get("ID", "")).strip())
+                    and bool(str(row.get("Клиент", "")).strip())
+                    and bool(str(row.get("Дата съёмки", "")).strip())
+                    and status not in ("Закрыта", "Отменена")
+                )
             elif list_type == "delivery":
                 include = (
                     photos_delivered != "Да"
