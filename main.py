@@ -343,11 +343,9 @@ def format_client_message(booking: Booking) -> str:
     return "\n".join(lines)
 
 
-def crm_request(webhook_url: str, payload: dict) -> dict:
-    session = requests.Session()
-
+def crm_write(webhook_url: str, payload: dict) -> dict:
     try:
-        initial = session.post(
+        response = requests.post(
             webhook_url,
             json=payload,
             timeout=(10, 30),
@@ -357,28 +355,6 @@ def crm_request(webhook_url: str, payload: dict) -> dict:
                 "User-Agent": "PhotoBookingBot/1.0",
             },
         )
-
-        if initial.status_code in (301, 302, 303, 307, 308):
-            redirect_url = initial.headers.get("Location")
-
-            if not redirect_url:
-                raise RuntimeError(
-                    "Google Apps Script не вернул redirect-ссылку"
-                )
-
-            response = session.get(
-                redirect_url,
-                timeout=(10, 30),
-                allow_redirects=True,
-                headers={
-                    "User-Agent": "PhotoBookingBot/1.0",
-                },
-            )
-        else:
-            response = initial
-
-        response.raise_for_status()
-
     except requests.Timeout as error:
         raise RuntimeError(
             "Google Apps Script слишком долго отвечал"
@@ -387,24 +363,117 @@ def crm_request(webhook_url: str, payload: dict) -> dict:
         raise RuntimeError(
             f"Не удалось связаться с Google CRM: {error}"
         ) from error
-    finally:
-        session.close()
 
-    try:
-        data = response.json()
-    except ValueError as error:
-        preview = response.text[:300].replace("\n", " ")
-        raise RuntimeError(
-            "Google CRM вернула не JSON: "
-            f"{preview}"
-        ) from error
+    # Google Apps Script выполняет операцию до перенаправления.
+    if response.status_code in (200, 201, 202, 204, 301, 302, 303, 307, 308):
+        return {"ok": True}
 
-    if not data.get("ok"):
-        raise RuntimeError(
-            data.get("error", "CRM вернула ошибку")
+    response.raise_for_status()
+    return {"ok": True}
+
+
+def load_crm_records(sheet_id: str, crm_gid: str) -> list[dict]:
+    return load_sheet(sheet_id, crm_gid)
+
+
+def parse_crm_date(value: str) -> datetime | None:
+    value = (value or "").strip()
+    if not value:
+        return None
+
+    for date_format in ("%d.%m.%Y", "%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(value, date_format)
+        except ValueError:
+            continue
+    return None
+
+
+def crm_read(config: dict, payload: dict) -> dict:
+    records = load_crm_records(
+        config["sheet_id"],
+        config["crm_gid"],
+    )
+    action = payload.get("action")
+
+    if action == "get":
+        booking_id = str(payload.get("id", ""))
+        record = next(
+            (
+                row
+                for row in records
+                if str(row.get("ID", "")) == booking_id
+            ),
+            None,
         )
+        return {"ok": bool(record), "record": record}
 
-    return data
+    if action == "search":
+        query = clean_key(str(payload.get("query", "")))
+        found = [
+            row
+            for row in records
+            if query in clean_key(str(row.get("Клиент", "")))
+        ]
+        return {"ok": True, "records": found[:30]}
+
+    if action == "list":
+        list_type = payload.get("list_type", "active")
+        today = datetime.now().date()
+        found = []
+
+        for row in records:
+            status = str(row.get("Статус", ""))
+            work_paid = str(row.get("Мне оплачено", ""))
+            studio_paid = str(row.get("Студия оплачена", ""))
+            photos_delivered = str(row.get("Фото отданы", ""))
+            studio_price_raw = str(
+                row.get("Стоимость студии, €", "0")
+            ).replace("€", "").replace(",", ".").strip()
+
+            try:
+                studio_price = float(studio_price_raw or 0)
+            except ValueError:
+                studio_price = 0
+
+            delivery_date = parse_crm_date(
+                str(row.get("Срок отдачи", ""))
+            )
+
+            include = False
+
+            if list_type == "active":
+                include = status not in ("Закрыта", "Отменена")
+            elif list_type == "delivery":
+                include = (
+                    photos_delivered != "Да"
+                    and delivery_date is not None
+                    and delivery_date.date() <= today
+                )
+            elif list_type == "unpaid_work":
+                include = (
+                    work_paid != "Да"
+                    and status != "Отменена"
+                )
+            elif list_type == "unpaid_studio":
+                include = (
+                    studio_price > 0
+                    and studio_paid != "Да"
+                    and status != "Отменена"
+                )
+
+            if include:
+                found.append(row)
+
+        found.sort(
+            key=lambda row: (
+                parse_crm_date(str(row.get("Дата съёмки", "")))
+                or datetime.max
+            )
+        )
+        return {"ok": True, "records": found[:50]}
+
+    raise RuntimeError("Неизвестная команда чтения CRM")
 
 
 async def create_crm_record(
@@ -434,7 +503,7 @@ async def create_crm_record(
         "photos_delivered": "Нет",
         "comment": "",
     }
-    await asyncio.to_thread(crm_request, webhook_url, payload)
+    await asyncio.to_thread(crm_write, webhook_url, payload)
 
 
 async def refresh_sheet_data(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -646,7 +715,7 @@ async def handle_crm_button(
 
     try:
         await asyncio.to_thread(
-            crm_request,
+            crm_write,
             context.application.bot_data["config"]["crm_webhook_url"],
             payload,
         )
@@ -658,10 +727,22 @@ async def handle_crm_button(
 
 
 
-def crm_get(webhook_url: str, payload: dict) -> dict:
-    result = crm_request(webhook_url, payload)
+def crm_get(config: dict, payload: dict) -> dict:
+    action = payload.get("action")
+
+    if action in {"get", "search", "list"}:
+        result = crm_read(config, payload)
+    else:
+        result = crm_write(
+            config["crm_webhook_url"],
+            payload,
+        )
+
     if not result.get("ok"):
-        raise RuntimeError(result.get("error", "CRM вернула ошибку"))
+        raise RuntimeError(
+            result.get("error", "CRM вернула ошибку")
+        )
+
     return result
 
 
@@ -795,7 +876,7 @@ async def client_command(
     try:
         data = await asyncio.to_thread(
             crm_get,
-            context.application.bot_data["config"]["crm_webhook_url"],
+            context.application.bot_data["config"],
             {
                 "action": "search",
                 "query": query_text,
@@ -853,7 +934,7 @@ async def handle_crm_navigation(
             list_type = data.split(":", 1)[1]
             response = await asyncio.to_thread(
                 crm_get,
-                webhook,
+                context.application.bot_data["config"],
                 {
                     "action": "list",
                     "list_type": list_type,
@@ -909,7 +990,7 @@ async def handle_crm_navigation(
             booking_id = data.split(":", 1)[1]
             response = await asyncio.to_thread(
                 crm_get,
-                webhook,
+                context.application.bot_data["config"],
                 {
                     "action": "get",
                     "id": booking_id,
@@ -949,7 +1030,7 @@ async def handle_crm_navigation(
 
             await asyncio.to_thread(
                 crm_get,
-                webhook,
+                context.application.bot_data["config"],
                 {
                     "action": "update",
                     "id": booking_id,
@@ -961,7 +1042,7 @@ async def handle_crm_navigation(
 
             response = await asyncio.to_thread(
                 crm_get,
-                webhook,
+                context.application.bot_data["config"],
                 {
                     "action": "get",
                     "id": booking_id,
@@ -989,7 +1070,7 @@ async def handle_crm_navigation(
 
             await asyncio.to_thread(
                 crm_get,
-                webhook,
+                context.application.bot_data["config"],
                 {
                     "action": "update",
                     "id": booking_id,
@@ -1001,7 +1082,7 @@ async def handle_crm_navigation(
 
             response = await asyncio.to_thread(
                 crm_get,
-                webhook,
+                context.application.bot_data["config"],
                 {
                     "action": "get",
                     "id": booking_id,
@@ -1050,6 +1131,7 @@ def main() -> None:
     studios_gid = os.environ.get("STUDIOS_GID", "0")
     guides_gid = os.environ["GUIDES_GID"]
     crm_webhook_url = os.environ["CRM_WEBHOOK_URL"]
+    crm_gid = os.environ.get("CRM_GID", "918273645")
     timezone = os.environ.get("TIMEZONE", "Europe/Riga")
     duration_minutes = int(os.environ.get("SHOOT_DURATION_MINUTES", "60"))
 
@@ -1072,6 +1154,7 @@ def main() -> None:
         "studios_gid": studios_gid,
         "guides_gid": guides_gid,
         "crm_webhook_url": crm_webhook_url,
+        "crm_gid": crm_gid,
         "timezone": timezone,
         "duration_minutes": duration_minutes,
     }
